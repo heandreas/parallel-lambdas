@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <vector>
+#include <thrust/system/omp/execution_policy.h>
 #include "../include/parallel_utils_openmp.h"
 #include "../include/parallel_utils_cuda.cu"
 
@@ -133,6 +134,10 @@ int main(void)
 		{
 			auto timer = Timer::logScopeTiming("Multi threaded CPU");
 			ParallelUtilsOpenMP::createTeam()->map(N, [&](size_t i) { y[i] = cpuLambda(input[i]); });
+		}
+		{
+			auto timer = Timer::logScopeTiming("Multi threaded CPU with thrust");
+			thrust::transform(thrust::system::omp::par, input.begin(), input.end(), y.begin(), cpuLambda);
 		}
 		{
 			auto timer = Timer::logScopeTiming("GPU");

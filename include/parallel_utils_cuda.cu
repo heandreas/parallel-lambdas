@@ -25,14 +25,6 @@ public:
 		return (a + b - 1) / b;
 	}
 
-	template<class OpListType>
-	class PerThreadOperation
-	{
-	public:
-		virtual ~PerThreadOperation() {}
-		virtual int doWork(OpListType* pOpList) = 0;
-	};
-
 	struct ScheduleHints
 	{
 		bool m_UseDynamicScheduling = false;
@@ -40,21 +32,6 @@ public:
 		ScheduleHints(bool useDynamicScheduling = false, size_t dynamicSchedulingChunkSize = 1) : m_UseDynamicScheduling(useDynamicScheduling), m_DynamicSchedulingChunkSize(dynamicSchedulingChunkSize) {}
 		static ScheduleHints dynamic(size_t dynamicSchedulingChunkSize = 1) { return ScheduleHints(true, dynamicSchedulingChunkSize); }
 	};
-
-	/*template<class PerThreadData, class FoldFunc>
-	class FoldOp : public PerThreadOperation<PerThreadData>
-	{
-		FoldFunc m_FoldFunc;
-		bool m_Ordered = false;
-	public:
-		virtual int doWork(int numThreads, int, PerThreadData& perThreadData) override
-		{
-			return 0;
-		}
-
-	public:
-		FoldOp(const FoldFunc& func, bool ordered = false) : m_FoldFunc(func), m_Ordered(ordered) {}
-	};*/
 
 	template<class CreateData>
 	using ReturnOfCreateData = typename std::result_of<CreateData(int)>::type;
@@ -94,13 +71,12 @@ public:
 		{
 			return _mapWithLocalData(numElements, [mapper] __device__ (int i, ThreadLocalData&) { mapper(i); }, scheduleHints);
 		}
-		//! Calls the given lambda synchronized for each thread, passing the thread-local data. Intended for fold / reduce operations.
-		/*template<class FoldFunc>
-		OpList* fold(const FoldFunc& foldFunc, bool ordered = false)
+		template<class FoldFunc>
+		Team* fold(const FoldFunc& foldFunc, ThreadLocalData& tOut)
 		{
-			m_List.emplace_back(new FoldOp<ThreadLocalData, FoldFunc>(foldFunc, ordered));
+			tOut = thrust::reduce(thrust::device, m_PerThreadData.begin(), m_PerThreadData.end(), foldFunc);
 			return this;
-		}*/
+		}
 
 		//! Adds a user-defined operation to the OpList. The CustomAdder class must implement a static function addOp(OpList*, params...).
 		template<typename CustomAdder, typename... Params>
