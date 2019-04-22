@@ -1,0 +1,123 @@
+#pragma once
+
+#include <vector>
+#include <type_traits>
+#include <algorithm>
+#include <thrust/device_vector.h>
+#include <cuda_runtime.h>
+
+template<typename T, typename F>
+__global__  void mapKernel(int n, T* pThreadData, F mapper)
+{
+	int index = blockIdx.x * blockDim.x + threadIdx.x;
+	pThreadData += index;
+	int stride = blockDim.x * gridDim.x;
+	for (int i = index; i < n; i += stride)
+		mapper(i, *pThreadData);
+}
+
+class ParallelUtilsCuda
+{
+public:
+	template<typename Int>
+	static Int ceilDivision(Int a, Int b)
+	{
+		return (a + b - 1) / b;
+	}
+
+	template<class OpListType>
+	class PerThreadOperation
+	{
+	public:
+		virtual ~PerThreadOperation() {}
+		virtual int doWork(OpListType* pOpList) = 0;
+	};
+
+	struct ScheduleHints
+	{
+		bool m_UseDynamicScheduling = false;
+		size_t m_DynamicSchedulingChunkSize = 1;
+		ScheduleHints(bool useDynamicScheduling = false, size_t dynamicSchedulingChunkSize = 1) : m_UseDynamicScheduling(useDynamicScheduling), m_DynamicSchedulingChunkSize(dynamicSchedulingChunkSize) {}
+		static ScheduleHints dynamic(size_t dynamicSchedulingChunkSize = 1) { return ScheduleHints(true, dynamicSchedulingChunkSize); }
+	};
+
+	/*template<class PerThreadData, class FoldFunc>
+	class FoldOp : public PerThreadOperation<PerThreadData>
+	{
+		FoldFunc m_FoldFunc;
+		bool m_Ordered = false;
+	public:
+		virtual int doWork(int numThreads, int, PerThreadData& perThreadData) override
+		{
+			return 0;
+		}
+
+	public:
+		FoldOp(const FoldFunc& func, bool ordered = false) : m_FoldFunc(func), m_Ordered(ordered) {}
+	};*/
+
+	template<class CreateData>
+	using ReturnOfCreateData = typename std::result_of<CreateData(int)>::type;
+
+	template<class CreateThreadLocalDataFunc>
+	class OpList
+	{
+		using ThreadLocalData = ReturnOfCreateData<CreateThreadLocalDataFunc>;
+		using SelfType = OpList<CreateThreadLocalDataFunc>;
+		CreateThreadLocalDataFunc m_CreateThreadLocalDataFunc;
+		int m_NumThreads;
+		thrust::device_vector<ThreadLocalData> m_PerThreadData;
+
+		template<class Mapper>
+		OpList* _mapWithLocalData(size_t numElements, const Mapper& mapper, const ScheduleHints& scheduleHints = ScheduleHints())
+		{
+			int blockSize = 256;
+			int numBlocks = std::min(m_NumThreads, (int)ceilDivision((int)numElements, blockSize));
+			mapKernel << <numBlocks, blockSize >> > ((int)numElements, thrust::raw_pointer_cast(&m_PerThreadData[0]), mapper);
+			cudaDeviceSynchronize();
+			return this;
+		}
+
+	public:
+		OpList(const CreateThreadLocalDataFunc& func, int numThreads) : m_CreateThreadLocalDataFunc(func), m_NumThreads(numThreads) {}
+
+		//! Performs a parallel map operation on the range [0, numElements). The mapper should take an index and the thread-local data as argument.
+		template<class Mapper>
+		OpList* mapWithLocalData(size_t numElements, const Mapper& mapper, const ScheduleHints& scheduleHints = ScheduleHints())
+		{
+			if (m_PerThreadData.empty()) m_PerThreadData.resize(m_NumThreads);
+			return _mapWithLocalData(numElements, mapper, scheduleHints);
+		}
+		//! Performs a parallel map operation on the range [0, numElements). The mapper should take an index as argument.
+		template<class Mapper>
+		OpList* map(size_t numElements, const Mapper& mapper, const ScheduleHints& scheduleHints = ScheduleHints())
+		{
+			return _mapWithLocalData(numElements, [mapper] __device__ (int i, ThreadLocalData&) { mapper(i); }, scheduleHints);
+		}
+		//! Calls the given lambda synchronized for each thread, passing the thread-local data. Intended for fold / reduce operations.
+		/*template<class FoldFunc>
+		OpList* fold(const FoldFunc& foldFunc, bool ordered = false)
+		{
+			m_List.emplace_back(new FoldOp<ThreadLocalData, FoldFunc>(foldFunc, ordered));
+			return this;
+		}*/
+
+		//! Adds a user-defined operation to the OpList. The CustomAdder class must implement a static function addOp(OpList*, params...).
+		template<typename CustomAdder, typename... Params>
+		OpList* customOp(const Params& ... params)
+		{
+			CustomAdder::addOp(this, params...);
+			return this;
+		}
+	};
+
+	struct NoThreadLocalData { int operator()(int) const { return 0; } };
+
+	//! @param createThreadLocalDataFunc is a function that initializes and returns the thread-local data passed to the mappers. The thread index is passed as an int parameter to the createData function.
+	//! @param numThreads is the number of threads that should be used for the computation.
+	template<class CreateThreadLocalDataFunc = NoThreadLocalData>
+	static std::unique_ptr<OpList<CreateThreadLocalDataFunc>> createTeam(const CreateThreadLocalDataFunc& createThreadLocalDataFunc = NoThreadLocalData(), int numThreads = 1 << 15)
+	{
+		return std::make_unique<OpList<CreateThreadLocalDataFunc>>(createThreadLocalDataFunc, numThreads);
+	}
+};
