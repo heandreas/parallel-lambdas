@@ -50,20 +50,6 @@ __host__ __device__ int ceilDivision(int a, int b)
 	return (a + b - 1) / b;
 }
 
-// function to add the elements of two arrays
-template<typename T, typename F>
-void opSP(int n, T* x, float* y, const F& op)
-{
-	for (int i = 0; i < n; i++)
-		y[i] = op(x[i]);
-}
-
-template<typename T, typename F>
-void opMT(int n, T* x, float* y, const F& op)
-{
-	ParallelUtilsOpenMP::createTeam()->map(n, [&](size_t i) { y[i] = op(x[i]); });
-}
-
 template<typename T, typename F>
 __global__ void opCuda(int n, T *x, float *y, F op)
 {
@@ -141,11 +127,12 @@ int main(void)
 	{
 		{
 			auto timer = Timer::logScopeTiming("Single threaded CPU");
-			opSP(N, input.data(), y.data(), cpuLambda);
+			for (int i = 0; i < N; i++)
+				y[i] = cpuLambda(input[i]);
 		}
 		{
 			auto timer = Timer::logScopeTiming("Multi threaded CPU");
-			opMT(N, input.data(), y.data(), cpuLambda);
+			ParallelUtilsOpenMP::createTeam()->map(N, [&](size_t i) { y[i] = cpuLambda(input[i]); });
 		}
 		{
 			auto timer = Timer::logScopeTiming("GPU");

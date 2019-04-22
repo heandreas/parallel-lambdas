@@ -92,7 +92,7 @@ public:
 			if (!m_ScheduleHints.m_UseDynamicScheduling || m_NumElements <= (size_t)numThreads)   // Dynamic scheduling makes no sense if there is less data than threads.
 			{
 				StaticScheduler scheduleHelper(m_NumElements, numThreads);
-#pragma omp for
+				#pragma omp for
 				for (int i = 0; i < scheduleHelper.numThreads(); i++)
 				{
 					scheduleHelper.mapThreadLocal(i, [&](size_t j) { m_Mapper(j, perThreadData); });
@@ -143,7 +143,7 @@ public:
 							m_Mapper(index, perThreadData);
 					}
 				}
-#pragma omp barrier
+				#pragma omp barrier
 			}
 			return 0;
 		}
@@ -164,16 +164,16 @@ public:
 			}
 			else if (m_Ordered)
 			{
-#pragma omp for ordered schedule(static, 1)
+				#pragma omp for ordered schedule(static, 1)
 				for (int i = 0; i < numThreads; i++)
 				{
-#pragma omp ordered
+					#pragma omp ordered
 					m_FoldFunc(perThreadData);
 				}
 			}
 			else
 			{
-#pragma omp critical
+				#pragma omp critical
 				m_FoldFunc(perThreadData);
 			}
 			return 0;
@@ -187,7 +187,7 @@ public:
 	using ReturnOfCreateData = typename std::result_of<CreateData(int)>::type;
 
 	template<class CreateThreadLocalDataFunc>
-	class OpList
+	class Team
 	{
 		using ThreadLocalData = ReturnOfCreateData<CreateThreadLocalDataFunc>;
 		CreateThreadLocalDataFunc m_CreateThreadLocalDataFunc;
@@ -196,32 +196,32 @@ public:
 		bool m_Executed = false;
 
 	public:
-		OpList(const CreateThreadLocalDataFunc& func, int numThreads) : m_CreateThreadLocalDataFunc(func), m_NumThreads(numThreads) {}
-		~OpList() { if (!m_Executed) execute(); }
+		Team(const CreateThreadLocalDataFunc& func, int numThreads) : m_CreateThreadLocalDataFunc(func), m_NumThreads(numThreads) {}
+		~Team() { if (!m_Executed) execute(); }
 
 		//! Performs a parallel map operation on the range [0, numElements). The mapper should take an index and the thread-local data as argument.
 		template<class Mapper>
-		OpList* mapWithLocalData(size_t numElements, const Mapper& mapper, const ScheduleHints& scheduleHints = ScheduleHints())
+		Team* mapWithLocalData(size_t numElements, const Mapper& mapper, const ScheduleHints& scheduleHints = ScheduleHints())
 		{
 			m_List.emplace_back(new MapWithLocalDataOp<ThreadLocalData, Mapper>(numElements, mapper, m_NumThreads, scheduleHints));
 			return this;
 		}
 		//! Performs a parallel map operation on the range [0, numElements). The mapper should take an index as argument.
 		template<class Mapper>
-		OpList* map(size_t numElements, const Mapper& mapper, const ScheduleHints& scheduleHints = ScheduleHints())
+		Team* map(size_t numElements, const Mapper& mapper, const ScheduleHints& scheduleHints = ScheduleHints())
 		{
 			return mapWithLocalData(numElements, [mapper](size_t i, ThreadLocalData&) { mapper(i); }, scheduleHints);
 		}
 		//! Calls the given lambda synchronized for each thread, passing the thread-local data. Intended for fold / reduce operations.
 		template<class FoldFunc>
-		OpList* fold(const FoldFunc& foldFunc, bool ordered = false)
+		Team* fold(const FoldFunc& foldFunc, bool ordered = false)
 		{
 			m_List.emplace_back(new FoldOp<ThreadLocalData, FoldFunc>(foldFunc, ordered));
 			return this;
 		}
 		//! Adds a user-defined operation to the OpList. The CustomAdder class must implement a static function addOp(OpList*, params...).
 		template<typename CustomAdder, typename... Params>
-		OpList* customOp(const Params& ... params)
+		Team* customOp(const Params& ... params)
 		{
 			CustomAdder::addOp(this, params...);
 			return this;
@@ -237,7 +237,7 @@ public:
 			}
 			else
 			{   // Multithreaded version.
-#pragma omp parallel num_threads(m_NumThreads)
+				#pragma omp parallel num_threads(m_NumThreads)
 				{
 					int ownThreadNum = omp_get_thread_num();
 					auto localData = m_CreateThreadLocalDataFunc(ownThreadNum);
@@ -256,8 +256,8 @@ public:
 	//! @param createThreadLocalDataFunc is a function that initializes and returns the thread-local data passed to the mappers. The thread index is passed as an int parameter to the createData function.
 	//! @param numThreads is the number of threads that should be used for the computation.
 	template<class CreateThreadLocalDataFunc = NoThreadLocalData>
-	static std::unique_ptr<OpList<CreateThreadLocalDataFunc>> createTeam(const CreateThreadLocalDataFunc& createThreadLocalDataFunc = NoThreadLocalData(), int numThreads = omp_get_max_threads())
+	static std::unique_ptr<Team<CreateThreadLocalDataFunc>> createTeam(const CreateThreadLocalDataFunc& createThreadLocalDataFunc = NoThreadLocalData(), int numThreads = omp_get_max_threads())
 	{
-		return std::make_unique<OpList<CreateThreadLocalDataFunc>>(createThreadLocalDataFunc, numThreads);
+		return std::make_unique<Team<CreateThreadLocalDataFunc>>(createThreadLocalDataFunc, numThreads);
 	}
 };
